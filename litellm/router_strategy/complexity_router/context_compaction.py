@@ -246,13 +246,22 @@ async def _count(router: Router, payload: Mapping[str, object]) -> int:
     )
 
 
+def _model_info(router: Router, deployment: Mapping[str, object], model: str) -> Mapping[str, object]:
+    from litellm.exceptions import ModelNotMappedError
+
+    try:
+        return _MAPPING.validate_python(
+            router.get_router_model_info(deployment=_DICT.validate_python(deployment), received_model_name=model)
+        )
+    except ModelNotMappedError:
+        return _EMPTY
+
+
 def _budget(
     router: Router, deployment: Mapping[str, object], payload: Mapping[str, object], ratio: float
 ) -> InputBudget:
     model: Final = str(payload.get("model", ""))
-    info: Final = _MAPPING.validate_python(
-        router.get_router_model_info(deployment=_DICT.validate_python(deployment), received_model_name=model)
-    )
+    info: Final = _model_info(router, deployment, model)
     raw_window: Final = info.get("max_input_tokens")
     window: Final = raw_window if isinstance(raw_window, int) and not isinstance(raw_window, bool) else None
     output: Final = next(

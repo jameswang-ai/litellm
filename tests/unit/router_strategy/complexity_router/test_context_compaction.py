@@ -258,6 +258,28 @@ async def test_fitting_request_survives_unavailable_compaction(
 
 
 @pytest.mark.parametrize("surface", ["chat", "messages", "responses"])
+async def test_unmapped_tier_model_routes_with_unknown_window(
+    wire: tuple[respx.Route, respx.Route], surface: Surface,
+) -> None:
+    router: Final = make_router(answer_defaults={"custom_llm_provider": "openai"})
+    await invoke(router, surface, history(surface))
+    compactor, answer = wire
+    assert compactor.call_count == 0 and answer.call_count == 1
+    assert "Background detail" in answer.calls[0].request.content.decode()
+
+
+async def test_mapped_tier_model_with_provider_override_keeps_its_budget(
+    wire: tuple[respx.Route, respx.Route], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "openai/arbitrary-answer", {"litellm_provider": "openai", "mode": "chat"})
+    router: Final = make_router(answer_defaults={"custom_llm_provider": "openai"})
+    await invoke(router, "chat", history("chat"))
+    compactor, answer = wire
+    assert compactor.call_count == answer.call_count == 1
+    assert "Background detail" not in answer.calls[0].request.content.decode()
+
+
+@pytest.mark.parametrize("surface", ["chat", "messages", "responses"])
 async def test_uncompactable_overflow_uses_explicit_context_fallback(
     wire: tuple[respx.Route, respx.Route], surface: Surface,
 ) -> None:

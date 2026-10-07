@@ -1,59 +1,95 @@
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator, with_config
+from pydantic import ConfigDict, Field, PrivateAttr, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
-DecisionsJSON: TypeAlias = str | Mapping[str, object] | Sequence[object]
-NoulCriteria: TypeAlias = Mapping[Literal["true", "false"], DecisionsJSON | None]
+ChoiceValue: TypeAlias = str | bool
 
 
-class NoulQuestion(LiteLLMPydanticObjectBase):
-    type: Literal["noul"]
-    instructions: DecisionsJSON | None = None
-    criteria: NoulCriteria | None = None
+class DecisionInputText(LiteLLMPydanticObjectBase):
+    type: Literal["input_text"]
+    text: str
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
-    @model_validator(mode="after")
-    def require_instructions_or_criteria(self) -> "NoulQuestion":
-        if self.instructions is None and self.criteria is None:
-            raise ValueError("A noul question requires instructions or criteria")
-        return self
+
+class DecisionInputImage(LiteLLMPydanticObjectBase):
+    type: Literal["input_image"]
+    image_url: str
+    detail: Literal["low", "high", "auto", "original"] | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+DecisionInputPart: TypeAlias = Annotated[DecisionInputText | DecisionInputImage, Field(discriminator="type")]
+
+
+class DecisionInputMessage(LiteLLMPydanticObjectBase):
+    role: Literal["user"]
+    content: str | Sequence[DecisionInputPart]
+    type: Literal["message"] | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+DecisionsInput: TypeAlias = str | Sequence[DecisionInputMessage]
+
+
+class DecisionChoice(LiteLLMPydanticObjectBase):
+    value: ChoiceValue
+    description: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class DecisionLevel(LiteLLMPydanticObjectBase):
+    label: str
+    description: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class PredicateQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["predicate"]
+    instructions: str
+    name: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class ChoiceQuestion(LiteLLMPydanticObjectBase):
     type: Literal["choice"]
-    instructions: DecisionsJSON | None = None
-    criteria: Annotated[Mapping[str, DecisionsJSON | None], Field(min_length=1, max_length=255)]
+    instructions: str
+    choices: Annotated[Sequence[DecisionChoice], Field(min_length=1)]
+    name: str | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class ScoreQuestion(LiteLLMPydanticObjectBase):
     type: Literal["score"]
-    instructions: DecisionsJSON | None = None
-    criteria: Annotated[Sequence[DecisionsJSON], Field(min_length=1, max_length=10)]
+    instructions: str
+    levels: Annotated[Sequence[DecisionLevel], Field(min_length=1)]
+    name: str | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 DecisionQuestion: TypeAlias = Annotated[
-    NoulQuestion | ChoiceQuestion | ScoreQuestion,
+    PredicateQuestion | ChoiceQuestion | ScoreQuestion,
     Field(discriminator="type"),
 ]
 
-DecisionQuestionMap: TypeAlias = Annotated[
-    Mapping[Annotated[str, Field(min_length=1)], DecisionQuestion],
-    Field(min_length=1, max_length=128),
-]
+DecisionQuestions: TypeAlias = Annotated[Sequence[DecisionQuestion], Field(min_length=1)]
 
 
 class DecisionsRequestBody(LiteLLMPydanticObjectBase):
-    state: DecisionsJSON
-    questions: DecisionQuestionMap
+    input: DecisionsInput
+    questions: DecisionQuestions
+    safety_identifier: str | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -65,8 +101,9 @@ class DecisionsRequest(DecisionsRequestBody):
 @with_config(ConfigDict(extra="allow"))
 class DecisionsCallParams(TypedDict, total=False):
     model: Required[ReadOnly[str]]
-    state: Required[ReadOnly[DecisionsJSON]]
-    questions: Required[ReadOnly[DecisionQuestionMap]]
+    input: Required[ReadOnly[DecisionsInput]]
+    questions: Required[ReadOnly[DecisionQuestions]]
+    safety_identifier: ReadOnly[str | None]
     api_key: ReadOnly[str | None]
     api_base: ReadOnly[str | None]
     timeout: ReadOnly[float | None]
@@ -74,48 +111,88 @@ class DecisionsCallParams(TypedDict, total=False):
     extra_headers: ReadOnly[Mapping[str, str] | None]
 
 
-class NoulAnswer(LiteLLMPydanticObjectBase):
-    type: Literal["noul"]
-    noul: float
+class PredicateAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["predicate"]
+    name: str | None = None
+    probability: float
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class ChoiceProbability(LiteLLMPydanticObjectBase):
+    value: ChoiceValue
+    probability: float
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class ChoiceAnswer(LiteLLMPydanticObjectBase):
     type: Literal["choice"]
-    choice: str
+    name: str | None = None
+    choice: ChoiceValue
+    probabilities: Sequence[ChoiceProbability]
     confidence: float
-    probabilities: Mapping[str, float]
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class ScoreProbability(LiteLLMPydanticObjectBase):
+    value: int
+    label: str
+    probability: float
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class ScoreAnswer(LiteLLMPydanticObjectBase):
     type: Literal["score"]
+    name: str | None = None
     score: float
+    probabilities: Sequence[ScoreProbability]
     confidence: float
-    legend: Mapping[str, DecisionsJSON]
-    probabilities: Mapping[str, float]
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class RefusalAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["refusal"]
+    name: str | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 DecisionAnswer: TypeAlias = Annotated[
-    NoulAnswer | ChoiceAnswer | ScoreAnswer,
+    PredicateAnswer | ChoiceAnswer | ScoreAnswer | RefusalAnswer,
     Field(discriminator="type"),
 ]
 
 
+class DecisionsInputTokensDetails(LiteLLMPydanticObjectBase):
+    cached_tokens: int = 0
+    cache_write_tokens: int = 0
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class DecisionsOutputTokensDetails(LiteLLMPydanticObjectBase):
+    reasoning_tokens: int = 0
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
 class DecisionsUsage(LiteLLMPydanticObjectBase):
     input_tokens: int = 0
+    input_tokens_details: DecisionsInputTokensDetails = Field(default_factory=DecisionsInputTokensDetails)
     output_tokens: int = 0
+    output_tokens_details: DecisionsOutputTokensDetails = Field(default_factory=DecisionsOutputTokensDetails)
+    total_tokens: int = 0
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class DecisionsResponse(LiteLLMPydanticObjectBase):
     model: str | None = None
-    answers: Mapping[str, DecisionAnswer]
+    answers: Sequence[DecisionAnswer]
     usage: DecisionsUsage | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)

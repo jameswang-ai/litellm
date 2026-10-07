@@ -1,6 +1,8 @@
 name: "CodeQL"
 
 on:
+  push:
+    branches: [litellm_codeql_default_suite]
   pull_request:
     branches: [main]
   schedule:
